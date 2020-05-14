@@ -3,6 +3,7 @@ models/runs/*
 models/profiles/*
 models/*.prof
 *.prof
+models/.data/*
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

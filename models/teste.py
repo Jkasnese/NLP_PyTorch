@@ -1,0 +1,2 @@
+def funcionou():
+    print("Funcionou!")
