@@ -2,8 +2,11 @@ datasets/*
 models/runs/*
 models/profiles/*
 models/*.prof
-*.prof
 models/.data/*
+models/new_test/*
+models/tst_torchEx/*
+*.json
+*.prof
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

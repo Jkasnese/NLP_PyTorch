@@ -1,6 +1,3 @@
-# Nvidia profiler command
-# nvprof --analysis-metrics --dependency-analysis --quiet --profile-from-start off -o nvprof.prof python3 
-
 import torch
 import torchtext
 from torchtext.datasets import text_classification
@@ -36,6 +33,7 @@ class TextSentiment(nn.Module):
 VOCAB_SIZE = len(train_dataset.get_vocab())
 EMBED_DIM = 32
 NUN_CLASS = len(train_dataset.get_labels())
+model = TextSentiment(VOCAB_SIZE, EMBED_DIM, NUN_CLASS).to(device)
 
 def generate_batch(batch):
     label = torch.tensor([entry[0] for entry in batch])
@@ -63,11 +61,11 @@ def train_func(sub_train_):
         text, offsets, cls = text.to(device), offsets.to(device), cls.to(device)
         output = model(text, offsets)
         loss = criterion(output, cls)
-        # train_loss += loss.item()
+        train_loss += loss.item()
         loss.backward()
-        # train_acc += (output.argmax(1) == cls).sum().item()
         optimizer.step()
-        
+        train_acc += (output.argmax(1) == cls).sum().item()
+
     # Adjust the learning rate
     scheduler.step()
 
@@ -82,8 +80,8 @@ def test(data_):
         with torch.no_grad():
             output = model(text, offsets)
             loss = criterion(output, cls)
-            # loss += loss.item()
-            # acc += (output.argmax(1) == cls).sum().item()
+            loss += loss.item()
+            acc += (output.argmax(1) == cls).sum().item()
 
     return loss / len(data_), acc / len(data_)
 
@@ -92,9 +90,7 @@ from torch.utils.data.dataset import random_split
 N_EPOCHS = 5
 min_valid_loss = float('inf')
 
-with torch.cuda.profiler.profile():
-    model = TextSentiment(VOCAB_SIZE, EMBED_DIM, NUN_CLASS).to(device)
-    criterion = torch.nn.CrossEntropyLoss().to(device)
+criterion = torch.nn.CrossEntropyLoss().to(device)
 optimizer = torch.optim.SGD(model.parameters(), lr=4.0)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 1, gamma=0.9)
 
@@ -102,31 +98,16 @@ train_len = int(len(train_dataset) * 0.95)
 sub_train_, sub_valid_ = \
     random_split(train_dataset, [train_len, len(train_dataset) - train_len])
 
-# start_time = time.time()
+for epoch in range(N_EPOCHS):
 
-def train_loop(N_EPOCHS):
-    for epoch in range(N_EPOCHS):
-        with torch.cuda.profiler.profile():
-            if (N_EPOCHS == 3):
-                with torch.autograd.profiler.emit_nvtx():
-                    train_loss, train_acc = train_func(sub_train_)
-                    valid_loss, valid_acc = test(sub_valid_)
-            else:
-                train_loss, train_acc = train_func(sub_train_)
-                valid_loss, valid_acc = test(sub_valid_)
+    start_time = time.time()
+    train_loss, train_acc = train_func(sub_train_)
+    valid_loss, valid_acc = test(sub_valid_)
 
-with torch.autograd.profiler.profile() as prof:
-    train_loop(5)
-    # cProfile.run("train_loop(5)", "cProfile.prof")
+    secs = int(time.time() - start_time)
+    mins = secs / 60
+    secs = secs % 60
 
-
-with open ("autograd_profiler_noadd.prof", 'w') as f:
-    f.write(prof.key_averages().table(sort_by="self_cpu_time_total"))
-
-# secs = int(time.time() - start_time)
-# mins = secs / 60
-# secs = secs % 60
-
-# print('Epoch: %d' %(epoch + 1), " | time in %d minutes, %d seconds" %(mins, secs))
-# print(f'\tLoss: {train_loss:.4f}(train)\t|\tAcc: {train_acc * 100:.1f}%(train)')
-# print(f'\tLoss: {valid_loss:.4f}(valid)\t|\tAcc: {valid_acc * 100:.1f}%(valid)')
+    print('Epoch: %d' %(epoch + 1), " | time in %d minutes, %d seconds" %(mins, secs))
+    print(f'\tLoss: {train_loss:.4f}(train)\t|\tAcc: {train_acc * 100:.1f}%(train)')
+    print(f'\tLoss: {valid_loss:.4f}(valid)\t|\tAcc: {valid_acc * 100:.1f}%(valid)')

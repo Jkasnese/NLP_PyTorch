@@ -28,32 +28,25 @@ else:
 
 # Training variables and hyperparameters
 NUM_LABELS = 4
+NUM_EPOCHS = 1
 
-H_BATCH_SIZE = [256, 64, 32, 8] # opts
-H_NUM_HIDDEN = [256, 128, 64] # opts
-H_OPTIMIZER = ["sgd", "adam"] # opts
-H_LEARNING_RATE = [0.1, 0.01, 0.001] # opts
-H_LOSS_FUNC = ["cross", "nll"] # opts
-
-# Load data and make batches
-print ("Reading data")
-vocabulary, data = load_vocab_data()
-print("Vocabulary len is: %d." % (len(vocabulary)))
-data_len = len(data)
-train_len = int (data_len * 0.9)
-sub_train, sub_valid = random_split(data, [train_len, (len(data) - train_len)] )
-print ("Data read and split!")
+H_BATCH_SIZE = [512, 256] # opts , 64, 32, 8
+H_NUM_HIDDEN = [256, 64] # opts 128,
+H_OPTIMIZER = ["sgd"] # opts , "adam"
+H_LEARNING_RATE = [0.1, 0.001] # opts  0.01, 
+H_LOSS_FUNC = ["cross"] # opts , "nll"
 
 # TODO: 
 # Open issue about for loop.
 # Consider transforming generate_batch into a generator?
-def generate_batch(data):
-    for entry in data:
-        sentence = [make_bow_vector(entry[0], vocabulary)]
-        label = [int(entry[1]) - 1]
-    sentence = torch.FloatTensor(sentence)
-    label = torch.tensor(label)
-    return sentence, label
+def generate_batch(batch):
+    return batch[0][0], batch[0][1]
+
+# Load data and make batches
+vocabulary, data = load_vocab_data()
+# print (make_bow_vector(data[0][0], vocabulary))
+
+print("Vocabulary len is: %d." % (len(vocabulary)))
 
 class BowModel(nn.Module):
     def __init__(self, num_class, vocab_size, num_hidden):
@@ -67,20 +60,27 @@ class BowModel(nn.Module):
         bow_vec = self.wb2(bow_vec)
         return F.log_softmax(bow_vec, dim=1)
 
-def train(sentences, label, model, batch_size, loss_function, optimizer):
+def train(sub_train_, model, batch_size, loss_function, optimizer):
     train_loss = 0
     train_acc = 0
 
-    optimizer.zero_grad()
-    output = model(sentences)
-    loss = loss_function(output, label)
-    train_loss += loss.item()
-    loss.backward()
-    optimizer.step()
 
-    train_acc += (output.argmax(1) == label).sum().item()
+    data_iter = DataLoader(sub_train_, batch_size=batch_size, shuffle=True, collate_fn=generate_batch, pin_memory=True).__iter__()
 
-    return train_loss, train_acc
+    for i in range(10):
+        sentences, label = next(data_iter)
+    # for i, (sentences, label) in enumerate(data_iter):
+        sentences, label = sentences.to(device), label.to(device)
+
+        optimizer.zero_grad()
+        output = model(sentences)
+        loss = loss_function(output, label)
+        train_loss += loss.item()
+        loss.backward()
+        optimizer.step()
+        train_acc += (output.argmax(1) == label).sum().item()
+
+    return train_loss / len(sub_train_), train_acc / len(sub_train_)
 
 def test(sub_test_, model, batch_size, loss_function):
     test_acc = 0
@@ -100,7 +100,29 @@ def test(sub_test_, model, batch_size, loss_function):
 
 def run_loop(BATCH_SIZE, NUM_HIDDEN, OPTIMIZER, LEARNING_RATE, LOSS_FUNC):
 
-    logdir = "runs/" + "%s_lr%f_nHid%d_%s_bs%d" % (OPTIMIZER, LEARNING_RATE, NUM_HIDDEN, LOSS_FUNC, BATCH_SIZE)
+    # Generate batches
+    batched_data = []
+    sentences_ = []
+    labels_ = []
+    global data
+    for i, (tup) in enumerate(data):
+        sentences_.append(make_bow_vector(tup[0], vocabulary))
+        labels_.append(tup[1])
+        
+        if (i % (BATCH_SIZE - 1) == 0 and i != 0):
+            sentences_ = torch.FloatTensor(sentences_)
+            labels_ = torch.tensor(labels_)
+            batched_data.append((sentences_, labels_))
+            sentences_ = []
+            labels_ = []
+    data = batched_data
+    BATCH_SIZE=1
+
+    data_len = len(batched_data)
+    train_len = int (data_len * 0.95)
+    sub_train, sub_valid = random_split(batched_data, [train_len, (len(batched_data) - train_len)] )
+
+    logdir = "new_test/" + "%s_lr%f_nHid%d_%s_bs%d" % (OPTIMIZER, LEARNING_RATE, NUM_HIDDEN, LOSS_FUNC, BATCH_SIZE)
     print ("Log directory: " + logdir)
     writer = SummaryWriter(logdir)
   
@@ -116,7 +138,7 @@ def run_loop(BATCH_SIZE, NUM_HIDDEN, OPTIMIZER, LEARNING_RATE, LOSS_FUNC):
     # Create model and add to Tensorboard
     model = BowModel(NUM_LABELS, len(vocabulary), NUM_HIDDEN)
     model = model.to(device)
-    data_iter = DataLoader(data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=generate_batch).__iter__()
+    data_iter = DataLoader(batched_data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=generate_batch).__iter__()
     input_, _ = next(data_iter)
     input_ = input_.to(device)
     writer.add_graph(model, input_)
@@ -138,43 +160,34 @@ def run_loop(BATCH_SIZE, NUM_HIDDEN, OPTIMIZER, LEARNING_RATE, LOSS_FUNC):
     better_runs = 0
 
     # Decide the granularity of the plot
-    min_batch_size = min(H_BATCH_SIZE)
+    # min_batch_size = min(H_BATCH_SIZE)
     # samples_to_info = int(data_len*0.01) # Percentage of samples before showing info
     # samples_to_info = samples_to_info / max(H_BATCH_SIZE) # How many steps the max batch_size have to take to show info
 
     print ("Beginning of training at " + datetime.datetime.now().strftime("%Y_%m_%d_-%H_%M_%S"))
     start_time = time.perf_counter()
 
-    for epoch in range(1):
+    for epoch in range(NUM_EPOCHS):
         train_acc = 0.0
         train_loss = 0.0
-        cum_train_loss = 0.0
-        cum_train_acc = 0.0
 
         # previous_time = time.perf_counter()
 
-        data_iter = DataLoader(sub_train, batch_size=BATCH_SIZE, shuffle=True, collate_fn=generate_batch, pin_memory=True)
-
-        for i, (sentences, label) in enumerate(data_iter):
-            sentences, label = sentences.to(device), label.to(device)
-            train_loss, train_acc = train(sentences, label, model, BATCH_SIZE, loss_function, optimizer)
-            cum_train_loss += train_loss
-            cum_train_acc += train_acc
-
-            # if (i * BATCH_SIZE % samples_to_info == 0): # Granularity of plot
-            # valid_loss, valid_acc = test(sub_valid, model, BATCH_SIZE, loss_function)
-            writer.add_scalar('Training Loss',
-                (cum_train_loss / (i+1)*BATCH_SIZE),
-                (i+1)*BATCH_SIZE*(epoch+1)/min_batch_size) # Number of samples normalized by 
-            writer.add_scalar('Training Accuracy',
-                (cum_train_acc / (i+1)*BATCH_SIZE),
-                (i+1)*BATCH_SIZE*(epoch+1)/min_batch_size)
-            writer.add_scalar('Validation Loss',
+        train_loss, train_acc = train(sub_train, model, BATCH_SIZE, loss_function, optimizer)
+        # if (i * BATCH_SIZE % samples_to_info == 0): # Granularity of plot
+        # valid_loss, valid_acc = test(sub_valid, model, BATCH_SIZE, loss_function)
+        writer.add_scalar('Training Loss',
                 train_loss,
-                (i+1)*BATCH_SIZE*(epoch+1)/min_batch_size)
-            writer.add_scalar('Validation Accuracy',    
+                epoch)
+        writer.add_scalar('Training Accuracy',
                 train_acc,
-                (i+1)*BATCH_SIZE*(epoch+1)/min_batch_size)
+                epoch)
+        # writer.add_scalar('Validation Loss',
+        #         valid_loss,
+        #         epoch)
+        # writer.add_scalar('Validation Accuracy',    
+        #         valid_acc,
+        #         epoch)
                 
         # Early stop
         # if (prev_valid_loss < valid_loss and prev_valid_acc > valid_acc):
@@ -187,39 +200,34 @@ def run_loop(BATCH_SIZE, NUM_HIDDEN, OPTIMIZER, LEARNING_RATE, LOSS_FUNC):
         # prev_valid_loss = valid_loss
         # prev_valid_acc = valid_acc
 
+    print ("Finished training at " + datetime.datetime.now().strftime("%Y_%m_%d_-%H_%M_%S"))
+
+
     # Beginning of testing
-    test_data = load_test_data()
-    print ("Len Test Data: %d" % len(test_data))
-    test_acc, test_loss = test(test_data, model, BATCH_SIZE, loss_function)
+    # test_data = load_test_data(vocabulary)
+    # print ("Len Test Data: %d" % len(test_data))
+    # test_acc, test_loss = test(test_data, model, BATCH_SIZE, loss_function)
 
     total_time = int (time.perf_counter() - start_time)
 
-    writer.add_hparams({"batch_size":BATCH_SIZE,
-                        "num_hidden":NUM_HIDDEN,
-                        "optimizer":OPTIMIZER, 
-                        "learning_rate":LEARNING_RATE,
-                        "loss_function":LOSS_FUNC},
-                        {"Test_acc":test_acc, "Test_loss":test_loss, "total_time":total_time})
+    # writer.add_hparams({"batch_size":BATCH_SIZE,
+    #                     "num_hidden":NUM_HIDDEN,
+    #                     "optimizer":OPTIMIZER, 
+    #                     "learning_rate":LEARNING_RATE,
+    #                     "loss_function":LOSS_FUNC},
+    #                     {"Test_acc":test_acc, "Test_loss":test_loss, "total_time":total_time})
 
-    writer.add_scalar('total_time', 
-                        total_time,
-                        0)
+    # writer.add_scalar('total_time', 
+    #                     total_time,
+    #                     NUM_EPOCHS+1)
 
     secs = total_time % 60
     mins = (total_time / 60) % 60
     hours = total_time / 3600
     
-    print ("Finished training at " + datetime.datetime.now().strftime("%Y_%m_%d_-%H_%M_%S"))
     print ("Total time: %d:%d:%d HH:MM:SS" % (hours, mins, secs))
     with open(logdir + 'time.txt', 'w') as f:
-        f.write("Test acc: %.2f" % valid_acc)
         f.write("Total time: %f:%f:%f HH:MM:SS" % (hours, mins, secs))
-        f.write("Parameters: " +
-                        "\nbatch_size: " + str(BATCH_SIZE) +
-                        "\nnum_hidden: " + str(NUM_HIDDEN) +
-                        "\noptimizer " + str(OPTIMIZER) +
-                        "\nlearning_rate " + str(LEARNING_RATE) +
-                        "\nloss_function " + str(LOSS_FUNC))
 
 # for i in H_BATCH_SIZE:
 #     for j in H_NUM_HIDDEN:
@@ -228,13 +236,13 @@ def run_loop(BATCH_SIZE, NUM_HIDDEN, OPTIMIZER, LEARNING_RATE, LOSS_FUNC):
 #                 for m in H_LOSS_FUNC:
 #                     run_loop(i, j, k, l, m)
 
-# run_loop(256, 64, "sgd", 0.1, "cross")
+# run_loop(512, 64, "sgd", 0.1, "cross")
 
 
 
 sgd = "sgd"
 cross="cross"
-cProfile.run("run_loop(256, 64, sgd, 0.1, cross)", "valid_commented.cProfile.prof")
+cProfile.run("run_loop(256, 64, sgd, 0.1, cross)", "genbatch_beforehand.cProfile.prof")
 
-with open ("gen_batch.autograd.prof", 'w') as f:
-    f.write(prof.key_averages().table(sort_by="self_cpu_time_total"))
+# with open ("gen_batch.autograd.prof", 'w') as f:
+#     f.write(prof.key_averages().table(sort_by="self_cpu_time_total"))

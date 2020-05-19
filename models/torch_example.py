@@ -3,6 +3,7 @@ import torchtext
 from torchtext.datasets import text_classification
 NGRAMS = 2
 import os
+import cProfile
 if not os.path.isdir('./.data'):
     os.mkdir('./.data')
 train_dataset, test_dataset = text_classification.DATASETS['AG_NEWS'](
@@ -16,8 +17,7 @@ class TextSentiment(nn.Module):
     def __init__(self, vocab_size, embed_dim, num_class):
         super().__init__()
         self.embedding = nn.EmbeddingBag(vocab_size, embed_dim, sparse=True)
-        self.fc = nn.Linear(embed_dim, 300)
-        self.fc2 = nn.Linear(300, num_class)
+        self.fc = nn.Linear(embed_dim, num_class)
         self.init_weights()
 
     def init_weights(self):
@@ -28,8 +28,13 @@ class TextSentiment(nn.Module):
 
     def forward(self, text, offsets):
         embedded = self.embedding(text, offsets)
-        s1 = F.relu(self.fc(embedded))
-        return self.fc2(s1)
+        return self.fc(embedded)
+
+
+VOCAB_SIZE = len(train_dataset.get_vocab())
+EMBED_DIM = 32
+NUN_CLASS = len(train_dataset.get_labels())
+model = TextSentiment(VOCAB_SIZE, EMBED_DIM, NUN_CLASS).to(device)
 
 def generate_batch(batch):
     label = torch.tensor([entry[0] for entry in batch])
@@ -44,21 +49,6 @@ def generate_batch(batch):
     return text, offsets, label
 
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
-
-VOCAB_SIZE = len(train_dataset.get_vocab())
-print (VOCAB_SIZE)
-EMBED_DIM = 32
-NUN_CLASS = len(train_dataset.get_labels())
-model = TextSentiment(VOCAB_SIZE, EMBED_DIM, NUN_CLASS).to(device)
-data_iter = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True,
-                      collate_fn=generate_batch).__iter__()
-text, offset, _ = next(data_iter)
-text = text.to(device)
-offset = offset.to(device)
-writer = SummaryWriter("./.data/runs")
-writer.add_graph(model, [text, offset])
-writer.close()
 
 def train_func(sub_train_):
 
@@ -66,19 +56,22 @@ def train_func(sub_train_):
     train_loss = 0
     train_acc = 0
     data = DataLoader(sub_train_, batch_size=BATCH_SIZE, shuffle=True,
-                      collate_fn=generate_batch)
-    for i, (text, offsets, cls) in enumerate(data):
+                      collate_fn=generate_batch).__iter__()
+
+    for _ in range (10):
+    # for i, (text, offsets, cls) in enumerate(data):
+        text, offsets, cls = next(data)
+        print(text)
+        print(len(text))
         optimizer.zero_grad()
         text, offsets, cls = text.to(device), offsets.to(device), cls.to(device)
         output = model(text, offsets)
         loss = criterion(output, cls)
         train_loss += loss.item()
         loss.backward()
-        train_acc += (output.argmax(1) == cls).sum().item()
         optimizer.step()
-        # print (i)
-        113984
-        
+        train_acc += (output.argmax(1) == cls).sum().item()
+
     # Adjust the learning rate
     scheduler.step()
 
@@ -100,7 +93,7 @@ def test(data_):
 
 import time
 from torch.utils.data.dataset import random_split
-N_EPOCHS = 5
+N_EPOCHS = 1
 min_valid_loss = float('inf')
 
 criterion = torch.nn.CrossEntropyLoss().to(device)
@@ -111,16 +104,19 @@ train_len = int(len(train_dataset) * 0.95)
 sub_train_, sub_valid_ = \
     random_split(train_dataset, [train_len, len(train_dataset) - train_len])
 
-for epoch in range(N_EPOCHS):
+def run_loop(N_EPOCHS):
+    for epoch in range(N_EPOCHS):
 
-    start_time = time.time()
-    train_loss, train_acc = train_func(sub_train_)
-    valid_loss, valid_acc = test(sub_valid_)
+        # start_time = time.time()
+        train_loss, train_acc = train_func(sub_train_)
+        # valid_loss, valid_acc = test(sub_valid_)
 
-    secs = int(time.time() - start_time)
-    mins = secs / 60
-    secs = secs % 60
+        secs = int(time.time() - start_time)
+        mins = secs / 60
+        secs = secs % 60
 
-    print('Epoch: %d' %(epoch + 1), " | time in %d minutes, %d seconds" %(mins, secs))
-    print(f'\tLoss: {train_loss:.4f}(train)\t|\tAcc: {train_acc * 100:.1f}%(train)')
-    print(f'\tLoss: {valid_loss:.4f}(valid)\t|\tAcc: {valid_acc * 100:.1f}%(valid)')
+        print('Epoch: %d' %(epoch + 1), " | time in %d minutes, %d seconds" %(mins, secs))
+        print(f'\tLoss: {train_loss:.4f}(train)\t|\tAcc: {train_acc * 100:.1f}%(train)')
+        # print(f'\tLoss: {valid_loss:.4f}(valid)\t|\tAcc: {valid_acc * 100:.1f}%(valid)')
+        
+cProfile.run("run_loop(1)", "genbatch_torchexample.cProfile.prof")
